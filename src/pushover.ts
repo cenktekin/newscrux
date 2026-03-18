@@ -1,6 +1,7 @@
 // src/pushover.ts
-import { config } from './config.js';
+import { config, runtimeConfig } from './config.js';
 import { createLogger } from './logger.js';
+import { getLanguagePack } from './i18n.js';
 import type { QueueEntry, StructuredSummary } from './types.js';
 
 const log = createLogger('pushover');
@@ -50,8 +51,11 @@ interface RenderResult {
 export function renderNotification(entry: QueueEntry, summary: StructuredSummary): RenderResult {
   const isArxiv = entry.feedName.startsWith(config.arxivFeedPrefix);
   const emoji = isArxiv ? '📄' : '📰';
+  const { labels } = getLanguagePack(runtimeConfig.language);
 
-  const title = escapeHtml(summary.title_tr).slice(0, 250);
+  // Support both translated_title and legacy title_tr
+  const titleRaw = summary.translated_title || (summary as any).title_tr || entry.title;
+  const title = escapeHtml(titleRaw).slice(0, 250);
 
   const source = escapeHtml(entry.feedName);
   const whatHappened = escapeHtml(summary.what_happened);
@@ -59,8 +63,8 @@ export function renderNotification(entry: QueueEntry, summary: StructuredSummary
   const keyDetail = escapeHtml(summary.key_detail);
 
   const sourceLine = `${emoji} ${source}`;
-  const whatLine = `\n\n<b>Ne oldu:</b> ${whatHappened}`;
-  const whyLine = `\n\n<b>Neden önemli:</b> ${whyItMatters}`;
+  const whatLine = `\n\n<b>${labels.whatHappened}</b> ${whatHappened}`;
+  const whyLine = `\n\n<b>${labels.whyItMatters}</b> ${whyItMatters}`;
   const detailLine = `\n\n💡 ${keyDetail}`;
 
   const MAX_MESSAGE = 1024;
@@ -76,15 +80,15 @@ export function renderNotification(entry: QueueEntry, summary: StructuredSummary
   }
 
   const whyFirstSentence = whyItMatters.split(/[.!?]\s/)[0] + '.';
-  const whyLineShort = `\n\n<b>Neden önemli:</b> ${whyFirstSentence}`;
+  const whyLineShort = `\n\n<b>${labels.whyItMatters}</b> ${whyFirstSentence}`;
   message = sourceLine + whatLine + whyLineShort;
   if (message.length <= MAX_MESSAGE) {
     return { title, message, truncated: true };
   }
 
-  const availableForWhat = MAX_MESSAGE - (sourceLine + '\n\n<b>Ne oldu:</b> ' + whyLineShort).length;
+  const availableForWhat = MAX_MESSAGE - (sourceLine + `\n\n<b>${labels.whatHappened}</b> ` + whyLineShort).length;
   const whatTrimmed = trimToSentenceBoundary(whatHappened, Math.max(availableForWhat, 100));
-  message = sourceLine + `\n\n<b>Ne oldu:</b> ${whatTrimmed}` + whyLineShort;
+  message = sourceLine + `\n\n<b>${labels.whatHappened}</b> ${whatTrimmed}` + whyLineShort;
 
   return { title, message: message.slice(0, MAX_MESSAGE), truncated: true };
 }
@@ -134,7 +138,8 @@ export async function sendArticleNotification(
 ): Promise<{ success: boolean; truncated: boolean }> {
   const { title, message, truncated } = renderNotification(entry, summary);
   const isArxiv = entry.feedName.startsWith(config.arxivFeedPrefix);
-  const urlTitle = isArxiv ? 'Makaleyi Oku' : 'Devamını Oku';
+  const { labels } = getLanguagePack(runtimeConfig.language);
+  const urlTitle = isArxiv ? labels.readArticle : labels.readMore;
 
   const success = await sendNotification(title, message, entry.link, urlTitle);
   return { success, truncated };
