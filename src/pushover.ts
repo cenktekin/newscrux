@@ -54,8 +54,9 @@ export function renderNotification(entry: QueueEntry, summary: StructuredSummary
   const { labels } = getLanguagePack(runtimeConfig.language);
 
   // Support both translated_title and legacy title_tr
+  // Title is NOT HTML-escaped — Pushover does not parse HTML in titles
   const titleRaw = summary.translated_title || (summary as any).title_tr || entry.title;
-  const title = escapeHtml(titleRaw).slice(0, 250);
+  const title = titleRaw.slice(0, 250);
 
   const source = escapeHtml(entry.feedName);
   const whatHappened = escapeHtml(summary.what_happened);
