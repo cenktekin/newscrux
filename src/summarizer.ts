@@ -1,7 +1,8 @@
 // src/summarizer.ts
 import { OpenRouter } from '@openrouter/sdk';
-import { config } from './config.js';
+import { config, runtimeConfig } from './config.js';
 import { createLogger } from './logger.js';
+import { getLanguagePack } from './i18n.js';
 import type { QueueEntry, StructuredSummary, FeedKind } from './types.js';
 
 const log = createLogger('summarizer');
@@ -16,34 +17,6 @@ const KIND_TO_SOURCE_TYPE: Record<FeedKind, StructuredSummary['source_type']> = 
   research: 'research',
   newsletter: 'newsletter',
 };
-
-function buildSystemPrompt(feedKind: FeedKind): string {
-  const kindLabel = {
-    official_blog: 'resmi blog/duyuru',
-    media: 'medya haberi',
-    research: 'araştırma makalesi',
-    newsletter: 'teknik bülten',
-  }[feedKind];
-
-  return `Sen bir teknoloji haberleri analiz sistemisin.
-Sana bir ${kindLabel} veriliyor. Analiz edip aşağıdaki JSON formatında Türkçe çıktı üret.
-
-Zorunlu JSON formatı:
-{
-  "title_tr": "Haberin Türkçe başlığı (tek satır, kısa ve öz)",
-  "what_happened": "Ne oldu — en az 2-3 cümle detaylı açıklama",
-  "why_it_matters": "Neden önemli — en az 1-2 cümle, pratik etki ve sonuçlar",
-  "key_detail": "Bir kritik detay, rakam veya dikkat çeken bilgi",
-  "source_type": "${KIND_TO_SOURCE_TYPE[feedKind]}"
-}
-
-Kurallar:
-- Tüm metin Türkçe olmalı.
-- what_happened en az 50 karakter olmalı.
-- why_it_matters en az 20 karakter olmalı.
-- Teknik terimlerin Türkçe karşılığı varsa kullan, yoksa orijinalini koru.
-- SADECE geçerli JSON döndür, başka metin ekleme.`;
-}
 
 const MAX_RETRIES = 1;
 
@@ -72,9 +45,12 @@ function parseAndValidateSummary(text: string, feedKind: FeedKind): StructuredSu
 
     const parsed = JSON.parse(jsonStr);
 
-    const required = ['title_tr', 'what_happened', 'why_it_matters', 'key_detail', 'source_type'] as const;
-    for (const field of required) {
-      if (typeof parsed[field] !== 'string' || parsed[field].trim().length === 0) {
+    // Accept both translated_title and title_tr (backward compat)
+    const translatedTitle = parsed.translated_title || parsed.title_tr;
+
+    const fields = { translated_title: translatedTitle, what_happened: parsed.what_happened, why_it_matters: parsed.why_it_matters, key_detail: parsed.key_detail, source_type: parsed.source_type };
+    for (const [field, value] of Object.entries(fields)) {
+      if (typeof value !== 'string' || value.trim().length === 0) {
         log.warn(`Missing or empty field: ${field}`);
         return null;
       }
@@ -95,7 +71,7 @@ function parseAndValidateSummary(text: string, feedKind: FeedKind): StructuredSu
     }
 
     return {
-      title_tr: parsed.title_tr.trim(),
+      translated_title: translatedTitle.trim(),
       what_happened: parsed.what_happened.trim(),
       why_it_matters: parsed.why_it_matters.trim(),
       key_detail: parsed.key_detail.trim(),
@@ -109,7 +85,12 @@ function parseAndValidateSummary(text: string, feedKind: FeedKind): StructuredSu
 
 export async function summarizeEntry(entry: QueueEntry): Promise<StructuredSummary | null> {
   const content = entry.enrichedContent || entry.snippet;
-  const userContent = `Başlık: ${entry.title}\nKaynak: ${entry.feedName}\nKaynak tipi: ${entry.feedKind}\n\nİçerik:\n${content}`;
+  const pack = getLanguagePack(runtimeConfig.language);
+  const kindLabel = pack.kindLabels[entry.feedKind];
+  const sourceType = KIND_TO_SOURCE_TYPE[entry.feedKind];
+  const systemPrompt = pack.summarySystemPrompt(kindLabel, sourceType);
+
+  const userContent = `Title: ${entry.title}\nSource: ${entry.feedName}\nSource type: ${entry.feedKind}\n\nContent:\n${content}`;
 
   log.debug(`Summarizing: ${entry.title}`);
 
@@ -118,7 +99,7 @@ export async function summarizeEntry(entry: QueueEntry): Promise<StructuredSumma
       const result = await openrouter.chat.send({
         model: config.openrouterModel,
         messages: [
-          { role: 'system', content: buildSystemPrompt(entry.feedKind) },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: userContent },
         ],
       });
