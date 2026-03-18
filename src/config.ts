@@ -2,6 +2,7 @@
 import 'dotenv/config';
 import { join } from 'node:path';
 import type { FeedConfig } from './types.js';
+import type { SupportedLanguage } from './i18n.js';
 
 export const config = {
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
@@ -50,3 +51,8 @@ export const config = {
     { name: 'Ahead of AI', url: 'https://magazine.sebastianraschka.com/feed', kind: 'newsletter', priority: 'normal' },
   ] satisfies FeedConfig[],
 } as const;
+
+// Mutable runtime config (set by CLI args at startup)
+export const runtimeConfig: { language: SupportedLanguage } = {
+  language: 'en',
+};
