@@ -19,7 +19,7 @@ import {
   removeEntry,
   countByState,
 } from './queue.js';
-import { sendNotification, sendArticleNotification } from './pushover.js';
+import { sendNotification, sendArticleNotification, escapeHtml } from './pushover.js';
 import { parseArgs } from './cli.js';
 import { getLanguagePack } from './i18n.js';
 import type { PollMetrics } from './types.js';
@@ -38,6 +38,8 @@ function validateConfig(): void {
 }
 
 let pollCycleCount = 0;
+let lastArxivDigestTime = 0;
+const ARXIV_DIGEST_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 function emitMetrics(metrics: PollMetrics): void {
   const parts = Object.entries(metrics)
@@ -159,8 +161,13 @@ async function pollAndNotify(): Promise<void> {
     }
     saveArticleQueue();
 
+    // --- Send: split regular (immediate) vs arXiv (hourly digest) ---
     const toSend = getEntriesByState('summarized');
-    for (const entry of toSend) {
+    const regularToSend = toSend.filter(e => !isArxiv(e.feedName));
+    const arxivToSend = toSend.filter(e => isArxiv(e.feedName));
+
+    // Send regular articles immediately
+    for (const entry of regularToSend) {
       if (!entry.structuredSummary) {
         markFailed(entry.id, 'No structured summary available');
         metrics.send_failed++;
@@ -179,6 +186,52 @@ async function pollAndNotify(): Promise<void> {
 
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
+
+    // Send arXiv as hourly digest
+    const now = Date.now();
+    const arxivReady = arxivToSend.filter(e => e.structuredSummary);
+    if (arxivReady.length > 0 && (now - lastArxivDigestTime) >= ARXIV_DIGEST_INTERVAL_MS) {
+      const { labels } = getLanguagePack(runtimeConfig.language);
+
+      // Build digest message: each paper gets a compact entry
+      const digestParts: string[] = [];
+      for (const entry of arxivReady) {
+        const s = entry.structuredSummary!;
+        const title = s.translated_title || (s as any).title_tr || entry.title;
+        digestParts.push(`<b>${escapeHtml(title)}</b>\n${escapeHtml(s.what_happened)}`);
+      }
+
+      // Pushover 1024 char limit — fit as many papers as possible
+      let digestMessage = '';
+      let includedCount = 0;
+      for (const part of digestParts) {
+        const candidate = digestMessage ? digestMessage + '\n\n' + part : part;
+        if (candidate.length > 1000) break; // leave room for header
+        digestMessage = candidate;
+        includedCount++;
+      }
+
+      const digestTitle = `📄 arXiv Digest (${includedCount} ${includedCount === 1 ? 'paper' : 'papers'})`;
+      const success = await sendNotification(digestTitle, digestMessage, 'https://arxiv.org', labels.readMore);
+
+      if (success) {
+        // Mark all arxiv papers as sent (even those that didn't fit in message)
+        for (const entry of arxivReady) {
+          transitionEntry(entry.id, 'sent');
+          metrics.sent++;
+        }
+        lastArxivDigestTime = now;
+        log.info(`arXiv digest sent: ${includedCount} papers in message, ${arxivReady.length} total marked sent`);
+      } else {
+        for (const entry of arxivReady) {
+          markFailed(entry.id, 'arXiv digest send failed');
+          metrics.send_failed++;
+        }
+      }
+    } else if (arxivReady.length > 0) {
+      log.info(`arXiv: ${arxivReady.length} papers waiting for next digest (${Math.round((ARXIV_DIGEST_INTERVAL_MS - (now - lastArxivDigestTime)) / 60000)}min remaining)`);
+    }
+
     saveArticleQueue();
 
     const counts = countByState();
