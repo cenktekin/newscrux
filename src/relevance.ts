@@ -1,7 +1,8 @@
 // src/relevance.ts
 import { OpenRouter } from '@openrouter/sdk';
-import { config } from './config.js';
+import { config, runtimeConfig } from './config.js';
 import { createLogger } from './logger.js';
+import { callOllama } from './ollama.js';
 import type { QueueEntry } from './types.js';
 
 const log = createLogger('relevance');
@@ -58,81 +59,87 @@ export async function filterByRelevance(entries: QueueEntry[]): Promise<Relevanc
     .map((e, i) => `${i}. [${e.feedName}] ${e.title}\n   ${e.snippet.trim()}`)
     .join('\n');
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const result = await openrouter.chat.send({
-        model: config.openrouterModel,
-        messages: [
-          { role: 'system', content: RELEVANCE_PROMPT },
-          { role: 'user', content: list },
-        ],
-      });
+  let text: string;
 
-      const rawContent = result.choices?.[0]?.message?.content;
-      let text: string;
-      if (typeof rawContent === 'string') {
-        text = rawContent;
-      } else if (Array.isArray(rawContent)) {
-        text = rawContent
-          .filter((item): item is { type: 'text'; text: string } => item.type === 'text')
-          .map(item => item.text)
-          .join('');
-      } else {
-        text = '';
-      }
+  if (runtimeConfig.provider === 'ollama') {
+    text = await callOllama(list, RELEVANCE_PROMPT);
+  } else {
+    let openrouterText: string | null = null;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await openrouter.chat.send({
+          model: config.openrouterModel,
+          messages: [
+            { role: 'system', content: RELEVANCE_PROMPT },
+            { role: 'user', content: list },
+          ],
+        });
 
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        log.warn('No JSON array found in relevance response');
-        if (attempt < MAX_RETRIES) {
-          await delay(Math.pow(2, attempt + 1) * 1000);
-          continue;
-        }
-        return { passed: [], dropped: [], bypassed, parseError: true };
-      }
-
-      const parsed = JSON.parse(jsonMatch[0]) as Array<{ id: number; score: number }>;
-      const scores = new Map<number, number>();
-      for (const entry of parsed) {
-        if (typeof entry.id === 'number' && typeof entry.score === 'number') {
-          scores.set(entry.id, entry.score);
-        }
-      }
-
-      const threshold = config.relevanceThreshold;
-      const passed: QueueEntry[] = [];
-      const dropped: Array<{ entry: QueueEntry; score: number }> = [];
-
-      for (let i = 0; i < toScore.length; i++) {
-        const score = scores.get(i);
-        if (score === undefined) {
-          passed.push(toScore[i]);
-        } else if (score >= threshold) {
-          passed.push(toScore[i]);
+        const rawContent = result.choices?.[0]?.message?.content;
+        if (typeof rawContent === 'string') {
+          openrouterText = rawContent;
+        } else if (Array.isArray(rawContent)) {
+          openrouterText = rawContent
+            .filter((item): item is { type: 'text'; text: string } => item.type === 'text')
+            .map(item => item.text)
+            .join('');
         } else {
-          dropped.push({ entry: toScore[i], score });
+          openrouterText = '';
+        }
+        break;
+      } catch (err) {
+        if (attempt < MAX_RETRIES) {
+          const backoffMs = Math.pow(2, attempt + 1) * 1000;
+          log.warn(`Relevance attempt ${attempt + 1} failed, retrying in ${backoffMs}ms: ${err}`);
+          await delay(backoffMs);
+        } else {
+          log.error('Relevance check failed after retries — entries stay discovered for retry', err);
+          return { passed: [], dropped: [], bypassed, parseError: true };
         }
       }
+    }
 
-      if (dropped.length > 0) {
-        log.info(
-          `Relevance dropped ${dropped.length}: ${dropped.map(d => `"${d.entry.title}" (${d.score}/${threshold})`).join(', ')}`
-        );
-      }
-      log.info(`Relevance: ${passed.length}/${toScore.length} passed (threshold ${threshold})`);
+    if (openrouterText === null) {
+      return { passed: [], dropped: [], bypassed, parseError: true };
+    }
+    text = openrouterText;
+  }
 
-      return { passed, dropped, bypassed, parseError: false };
-    } catch (err) {
-      if (attempt < MAX_RETRIES) {
-        const backoffMs = Math.pow(2, attempt + 1) * 1000;
-        log.warn(`Relevance attempt ${attempt + 1} failed, retrying in ${backoffMs}ms: ${err}`);
-        await delay(backoffMs);
-      } else {
-        log.error('Relevance check failed after retries — entries stay discovered for retry', err);
-        return { passed: [], dropped: [], bypassed, parseError: true };
-      }
+  const jsonMatch = text.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) {
+    log.warn('No JSON array found in relevance response');
+    return { passed: [], dropped: [], bypassed, parseError: true };
+  }
+
+  const parsed = JSON.parse(jsonMatch[0]) as Array<{ id: number; score: number }>;
+  const scores = new Map<number, number>();
+  for (const entry of parsed) {
+    if (typeof entry.id === 'number' && typeof entry.score === 'number') {
+      scores.set(entry.id, entry.score);
     }
   }
 
-  return { passed: [], dropped: [], bypassed, parseError: true };
+  const threshold = config.relevanceThreshold;
+  const passed: QueueEntry[] = [];
+  const dropped: Array<{ entry: QueueEntry; score: number }> = [];
+
+  for (let i = 0; i < toScore.length; i++) {
+    const score = scores.get(i);
+    if (score === undefined) {
+      passed.push(toScore[i]);
+    } else if (score >= threshold) {
+      passed.push(toScore[i]);
+    } else {
+      dropped.push({ entry: toScore[i], score });
+    }
+  }
+
+  if (dropped.length > 0) {
+    log.info(
+      `Relevance dropped ${dropped.length}: ${dropped.map(d => `"${d.entry.title}" (${d.score}/${threshold})`).join(', ')}`
+    );
+  }
+  log.info(`Relevance: ${passed.length}/${toScore.length} passed (threshold ${threshold})`);
+
+  return { passed, dropped, bypassed, parseError: false };
 }

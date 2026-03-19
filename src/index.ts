@@ -27,12 +27,12 @@ import type { PollMetrics } from './types.js';
 const log = createLogger('main');
 
 function validateConfig(): void {
-  if (!config.openrouterApiKey) {
-    log.error('OPENROUTER_API_KEY is required. Set it in .env file.');
+  if (runtimeConfig.provider === 'openrouter' && !config.openrouterApiKey) {
+    log.error('OPENROUTER_API_KEY is required when provider=openrouter. Set it in .env file.');
     process.exit(1);
   }
-  if (!config.pushoverUserKey || !config.pushoverAppToken) {
-    log.error('PUSHOVER_USER_KEY and PUSHOVER_APP_TOKEN are required. Set them in .env file.');
+  if (!runtimeConfig.noPush && (!config.pushoverUserKey || !config.pushoverAppToken)) {
+    log.error('PUSHOVER_USER_KEY and PUSHOVER_APP_TOKEN are required. Set them in .env file or use --no-push.');
     process.exit(1);
   }
 }
@@ -161,75 +161,109 @@ async function pollAndNotify(): Promise<void> {
     }
     saveArticleQueue();
 
-    // --- Send: split regular (immediate) vs arXiv (hourly digest) ---
     const toSend = getEntriesByState('summarized');
     const regularToSend = toSend.filter(e => !isArxiv(e.feedName));
     const arxivToSend = toSend.filter(e => isArxiv(e.feedName));
 
-    // Send regular articles immediately
-    for (const entry of regularToSend) {
-      if (!entry.structuredSummary) {
-        markFailed(entry.id, 'No structured summary available');
-        metrics.send_failed++;
-        continue;
-      }
+    const { labels } = getLanguagePack(runtimeConfig.language);
 
-      const { success, truncated } = await sendArticleNotification(entry, entry.structuredSummary);
-      if (success) {
+    if (runtimeConfig.noPush) {
+      log.info('=== TERMINAL OUTPUT (no Pushover) ===');
+
+      for (const entry of regularToSend) {
+        if (!entry.structuredSummary) {
+          markFailed(entry.id, 'No structured summary available');
+          metrics.send_failed++;
+          continue;
+        }
+
+        const s = entry.structuredSummary;
+        console.log('');
+        console.log(`\x1b[1m\x1b[36m${s.translated_title}\x1b[0m`);
+        console.log(`  📰 ${entry.feedName}`);
+        console.log(`  ${labels.whatHappened} ${s.what_happened}`);
+        console.log(`  ${labels.whyItMatters} ${s.why_it_matters}`);
+        console.log(`  💡 ${s.key_detail}`);
+        console.log(`  🔗 ${entry.link}`);
+
         transitionEntry(entry.id, 'sent');
         metrics.sent++;
-        if (truncated) metrics.truncated++;
-      } else {
-        markFailed(entry.id, 'Pushover send failed');
-        metrics.send_failed++;
       }
+    } else {
+      for (const entry of regularToSend) {
+        if (!entry.structuredSummary) {
+          markFailed(entry.id, 'No structured summary available');
+          metrics.send_failed++;
+          continue;
+        }
 
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-
-    // Send arXiv as hourly digest
-    const now = Date.now();
-    const arxivReady = arxivToSend.filter(e => e.structuredSummary);
-    if (arxivReady.length > 0 && (now - lastArxivDigestTime) >= ARXIV_DIGEST_INTERVAL_MS) {
-      const { labels } = getLanguagePack(runtimeConfig.language);
-
-      // Build digest message: each paper gets a compact entry
-      const digestParts: string[] = [];
-      for (const entry of arxivReady) {
-        const s = entry.structuredSummary!;
-        const title = s.translated_title || (s as any).title_tr || entry.title;
-        digestParts.push(`<b>${escapeHtml(title)}</b>\n${escapeHtml(s.what_happened)}`);
-      }
-
-      // Pushover 1024 char limit — fit as many papers as possible
-      let digestMessage = '';
-      let includedCount = 0;
-      for (const part of digestParts) {
-        const candidate = digestMessage ? digestMessage + '\n\n' + part : part;
-        if (candidate.length > 1000) break; // leave room for header
-        digestMessage = candidate;
-        includedCount++;
-      }
-
-      const digestTitle = `📄 arXiv Digest (${includedCount} ${includedCount === 1 ? 'paper' : 'papers'})`;
-      const success = await sendNotification(digestTitle, digestMessage, 'https://arxiv.org', labels.readMore);
-
-      if (success) {
-        // Mark all arxiv papers as sent (even those that didn't fit in message)
-        for (const entry of arxivReady) {
+        const { success, truncated } = await sendArticleNotification(entry, entry.structuredSummary);
+        if (success) {
           transitionEntry(entry.id, 'sent');
           metrics.sent++;
-        }
-        lastArxivDigestTime = now;
-        log.info(`arXiv digest sent: ${includedCount} papers in message, ${arxivReady.length} total marked sent`);
-      } else {
-        for (const entry of arxivReady) {
-          markFailed(entry.id, 'arXiv digest send failed');
+          if (truncated) metrics.truncated++;
+        } else {
+          markFailed(entry.id, 'Pushover send failed');
           metrics.send_failed++;
         }
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
-    } else if (arxivReady.length > 0) {
-      log.info(`arXiv: ${arxivReady.length} papers waiting for next digest (${Math.round((ARXIV_DIGEST_INTERVAL_MS - (now - lastArxivDigestTime)) / 60000)}min remaining)`);
+    }
+
+    const now = Date.now();
+    const arxivReady = arxivToSend.filter(e => e.structuredSummary);
+
+    if (runtimeConfig.noPush) {
+      for (const entry of arxivReady) {
+        const s = entry.structuredSummary!;
+        console.log('');
+        console.log(`\x1b[1m\x1b[36m📄 ${s.translated_title}\x1b[0m`);
+        console.log(`  ${labels.whatHappened} ${s.what_happened}`);
+        console.log(`  🔗 ${entry.link}`);
+
+        transitionEntry(entry.id, 'sent');
+        metrics.sent++;
+      }
+    } else {
+      if (arxivReady.length > 0 && (now - lastArxivDigestTime) >= ARXIV_DIGEST_INTERVAL_MS) {
+        const { labels } = getLanguagePack(runtimeConfig.language);
+
+        const digestParts: string[] = [];
+        for (const entry of arxivReady) {
+          const s = entry.structuredSummary!;
+          const title = s.translated_title || (s as any).title_tr || entry.title;
+          digestParts.push(`<b>${escapeHtml(title)}</b>\n${escapeHtml(s.what_happened)}`);
+        }
+
+        let digestMessage = '';
+        let includedCount = 0;
+        for (const part of digestParts) {
+          const candidate = digestMessage ? digestMessage + '\n\n' + part : part;
+          if (candidate.length > 1000) break;
+          digestMessage = candidate;
+          includedCount++;
+        }
+
+        const digestTitle = `📄 arXiv Digest (${includedCount} ${includedCount === 1 ? 'paper' : 'papers'})`;
+        const success = await sendNotification(digestTitle, digestMessage, 'https://arxiv.org', labels.readMore);
+
+        if (success) {
+          for (const entry of arxivReady) {
+            transitionEntry(entry.id, 'sent');
+            metrics.sent++;
+          }
+          lastArxivDigestTime = now;
+          log.info(`arXiv digest sent: ${includedCount} papers in message, ${arxivReady.length} total marked sent`);
+        } else {
+          for (const entry of arxivReady) {
+            markFailed(entry.id, 'arXiv digest send failed');
+            metrics.send_failed++;
+          }
+        }
+      } else if (arxivReady.length > 0) {
+        log.info(`arXiv: ${arxivReady.length} papers waiting for next digest (${Math.round((ARXIV_DIGEST_INTERVAL_MS - (now - lastArxivDigestTime)) / 60000)}min remaining)`);
+      }
     }
 
     saveArticleQueue();
@@ -266,28 +300,36 @@ function setupShutdown(): void {
 }
 
 async function main(): Promise<void> {
-  // Parse CLI args before anything else
   const args = parseArgs();
   runtimeConfig.language = args.lang;
+  runtimeConfig.provider = args.provider;
+  runtimeConfig.noPush = args.noPush;
 
   const pack = getLanguagePack(runtimeConfig.language);
-  log.info(`Newscrux v2.0 starting... (language: ${pack.name})`);
+  log.info(`Newscrux v2.0 starting... (language: ${pack.name}, provider: ${runtimeConfig.provider}, noPush: ${runtimeConfig.noPush})`);
   validateConfig();
   setupShutdown();
 
-  const startupSent = await sendNotification(
-    '📡 Newscrux',
-    pack.labels.startupMessage,
-  );
+  if (!runtimeConfig.noPush) {
+    const startupSent = await sendNotification(
+      '📡 Newscrux',
+      pack.labels.startupMessage,
+    );
 
-  if (startupSent) {
-    log.info('Startup notification sent');
-  } else {
-    log.error('Failed to send startup notification — check Pushover credentials');
+    if (startupSent) {
+      log.info('Startup notification sent');
+    } else {
+      log.error('Failed to send startup notification — check Pushover credentials');
+    }
   }
 
   await pollAndNotify();
-  scheduleNextPoll();
+
+  if (!runtimeConfig.noPush) {
+    scheduleNextPoll();
+  } else {
+    log.info('Single run complete (no scheduling). Exiting.');
+  }
 }
 
 main().catch((err) => {

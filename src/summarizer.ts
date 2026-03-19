@@ -3,6 +3,7 @@ import { OpenRouter } from '@openrouter/sdk';
 import { config, runtimeConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { getLanguagePack } from './i18n.js';
+import { callOllama } from './ollama.js';
 import type { QueueEntry, StructuredSummary, FeedKind } from './types.js';
 
 const log = createLogger('summarizer');
@@ -94,37 +95,48 @@ export async function summarizeEntry(entry: QueueEntry): Promise<StructuredSumma
 
   log.debug(`Summarizing: ${entry.title}`);
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const result = await openrouter.chat.send({
-        model: config.openrouterModel,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-      });
+  let text: string;
 
-      const text = extractResponseText(result);
-      const summary = parseAndValidateSummary(text, entry.feedKind);
+  if (runtimeConfig.provider === 'ollama') {
+    text = await callOllama(userContent, systemPrompt);
+  } else {
+    let openrouterText: string | null = null;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await openrouter.chat.send({
+          model: config.openrouterModel,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent },
+          ],
+        });
 
-      if (summary) {
-        log.info(`Summarized: ${entry.title} (${summary.what_happened.length} chars)`);
-        return summary;
-      }
-
-      if (attempt < MAX_RETRIES) {
-        log.warn(`Summary validation failed for "${entry.title}", retrying...`);
-        await delay(2000);
-      }
-    } catch (err) {
-      if (attempt < MAX_RETRIES) {
-        log.warn(`Summarization attempt ${attempt + 1} failed for "${entry.title}", retrying: ${err}`);
-        await delay(Math.pow(2, attempt + 1) * 1000);
-      } else {
-        log.error(`Summarization failed after retries: ${entry.title}`, err);
+        openrouterText = extractResponseText(result);
+        break;
+      } catch (err) {
+        if (attempt < MAX_RETRIES) {
+          log.warn(`Summarization attempt ${attempt + 1} failed for "${entry.title}", retrying: ${err}`);
+          await delay(Math.pow(2, attempt + 1) * 1000);
+        } else {
+          log.error(`Summarization failed after retries: ${entry.title}`, err);
+          return null;
+        }
       }
     }
+
+    if (openrouterText === null) {
+      return null;
+    }
+    text = openrouterText;
   }
 
+  const summary = parseAndValidateSummary(text, entry.feedKind);
+
+  if (summary) {
+    log.info(`Summarized: ${entry.title} (${summary.what_happened.length} chars)`);
+    return summary;
+  }
+
+  log.warn(`Summary validation failed for "${entry.title}"`);
   return null;
 }

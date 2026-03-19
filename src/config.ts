@@ -31,6 +31,13 @@ export const config = {
   /** Rate limit delay between scraping requests to same domain (ms) */
   scrapingDomainDelayMs: 2000,
 
+  /** AI provider: 'openrouter' or 'ollama' */
+  aiProvider: (process.env.AI_PROVIDER || 'openrouter') as 'openrouter' | 'ollama',
+  /** Ollama base URL (default: http://localhost:11434/v1) */
+  ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1',
+  /** Ollama model name (default: deepseek-qwen-8b:latest) */
+  ollamaModel: process.env.OLLAMA_MODEL || 'deepseek-qwen-8b:latest',
+
   feeds: [
     // Official blogs (high priority — bypass relevance filter)
     { name: 'OpenAI News', url: 'https://openai.com/news/rss.xml', kind: 'official_blog', priority: 'high' },
@@ -53,6 +60,8 @@ export const config = {
 } as const;
 
 // Mutable runtime config (set by CLI args at startup)
-export const runtimeConfig: { language: SupportedLanguage } = {
+export const runtimeConfig: { language: SupportedLanguage; provider: 'openrouter' | 'ollama'; noPush: boolean } = {
   language: 'en',
+  provider: 'openrouter',
+  noPush: false,
 };
