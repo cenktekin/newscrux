@@ -4,3 +4,4 @@ data/
 .env
 *.tmp
 *.opml
+feeds.json

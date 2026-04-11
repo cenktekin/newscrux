@@ -11,6 +11,7 @@ export interface FeedConfig {
   url: string;
   kind: FeedKind;
   priority: 'high' | 'normal';
+  id?: string;
 }
 
 // --- Article (raw from RSS) ---

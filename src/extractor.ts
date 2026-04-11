@@ -121,6 +121,10 @@ export async function enrichEntry(entry: QueueEntry): Promise<{ enrichedContent:
     return { enrichedContent: entry.snippet, wasScraped: false };
   }
 
+  if (!config.scrapingEnabled) {
+    return { enrichedContent: entry.snippet, wasScraped: false };
+  }
+
   // Scrape full article
   log.info(`Snippet too short (${entry.snippet.length} chars), scraping: ${entry.link}`);
   const scraped = await scrapeArticle(entry.link);

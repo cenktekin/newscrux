@@ -98,7 +98,12 @@ export async function summarizeEntry(entry: QueueEntry): Promise<StructuredSumma
   let text: string;
 
   if (runtimeConfig.provider === 'ollama') {
-    text = await callOllama(userContent, systemPrompt);
+    const ollamaSystemPrompt = config.ollamaThink
+      ? systemPrompt
+      : `${systemPrompt}\n\nÖnemli: Düşünme / reasoning metni üretme. Yanıtı sadece istenen geçerli JSON olarak ver.`;
+    text = await callOllama(userContent, ollamaSystemPrompt, {
+      maxTokens: config.ollamaSummaryMaxTokens,
+    });
   } else {
     let openrouterText: string | null = null;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {

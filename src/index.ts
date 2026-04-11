@@ -22,9 +22,37 @@ import {
 import { sendNotification, sendArticleNotification, escapeHtml } from './pushover.js';
 import { parseArgs } from './cli.js';
 import { getLanguagePack } from './i18n.js';
+import { createApi } from './api.js';
+import { initializeFromConfig, getFeeds } from './feeds-manager.js';
 import type { PollMetrics } from './types.js';
 
 const log = createLogger('main');
+
+async function delay(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) return;
+
+  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
+  let currentIndex = 0;
+
+  const runner = async () => {
+    while (true) {
+      const index = currentIndex++;
+      if (index >= items.length) return;
+      await worker(items[index]);
+    }
+  };
+
+  await Promise.all(Array.from({ length: safeConcurrency }, () => runner()));
+}
 
 function validateConfig(): void {
   if (runtimeConfig.provider === 'openrouter' && !config.openrouterApiKey) {
@@ -48,26 +76,46 @@ function emitMetrics(metrics: PollMetrics): void {
   log.info(`[METRICS] poll_cycle=${pollCycleCount} ${parts}`);
 }
 
-async function pollAndNotify(): Promise<void> {
+export interface PollResult {
+  summaries: Array<{
+    id: string;
+    title: string;
+    feedName: string;
+    link: string;
+    whatHappened: string;
+    whyItMatters: string;
+    keyDetail: string;
+    isArxiv: boolean;
+  }>;
+  metrics: PollMetrics;
+  status: 'success' | 'no_new_articles' | 'cold_start';
+}
+
+export async function pollAndNotify(): Promise<PollResult> {
+  const result: PollResult = {
+    summaries: [],
+    metrics: {
+      discovered: 0,
+      enriched: 0,
+      enrichment_scraped: 0,
+      enrichment_snippet: 0,
+      relevance_passed: 0,
+      relevance_dropped: 0,
+      relevance_bypassed: 0,
+      summarized: 0,
+      summary_failed: 0,
+      sent: 0,
+      send_failed: 0,
+      truncated: 0,
+      queue_pending: 0,
+      queue_failed: 0,
+    },
+    status: 'success',
+  };
+
+  const metrics = result.metrics;
   pollCycleCount++;
   log.info('Starting poll cycle...');
-
-  const metrics: PollMetrics = {
-    discovered: 0,
-    enriched: 0,
-    enrichment_scraped: 0,
-    enrichment_snippet: 0,
-    relevance_passed: 0,
-    relevance_dropped: 0,
-    relevance_bypassed: 0,
-    summarized: 0,
-    summary_failed: 0,
-    sent: 0,
-    send_failed: 0,
-    truncated: 0,
-    queue_pending: 0,
-    queue_failed: 0,
-  };
 
   try {
     loadArticleQueue();
@@ -77,26 +125,28 @@ async function pollAndNotify(): Promise<void> {
     if (handleColdStart(allArticles)) {
       log.info('Cold start complete — no notifications this cycle');
       emitMetrics(metrics);
-      return;
+      result.status = 'cold_start';
+      return result;
     }
 
     const newCount = discoverArticles(allArticles);
     metrics.discovered = newCount;
     saveArticleQueue();
 
-    if (newCount === 0 && getEntriesByState('discovered').length === 0) {
+    if (newCount === 0 && getEntriesByState('discovered').length === 0 && getEntriesByState('enriched').length === 0 && getEntriesByState('summarized').length === 0) {
       log.info('No new or pending articles');
       emitMetrics(metrics);
-      return;
+      result.status = 'no_new_articles';
+      return result;
     }
 
     const relevancePassedIds = new Set<string>();
     // Limit discovered batch to prevent overwhelming the relevance model
-    const MAX_RELEVANCE_BATCH = 25;
+    const maxRelevanceBatch = config.relevanceBatchSize;
     const allDiscovered = getEntriesByState('discovered');
-    const discovered = allDiscovered.slice(0, MAX_RELEVANCE_BATCH);
+    const discovered = allDiscovered.slice(0, maxRelevanceBatch);
 
-    if (allDiscovered.length > MAX_RELEVANCE_BATCH) {
+    if (allDiscovered.length > maxRelevanceBatch) {
       log.info(`Processing ${discovered.length}/${allDiscovered.length} discovered articles this cycle`);
     }
 
@@ -134,7 +184,7 @@ async function pollAndNotify(): Promise<void> {
       ...arxivToEnrich.slice(0, config.arxivMaxPerPoll),
     ];
 
-    for (const entry of enrichBatch) {
+    await runWithConcurrency(enrichBatch, config.enrichConcurrency, async (entry) => {
       try {
         const { enrichedContent, wasScraped } = await enrichEntry(entry);
         transitionEntry(entry.id, 'enriched', { enrichedContent });
@@ -144,11 +194,11 @@ async function pollAndNotify(): Promise<void> {
       } catch (err) {
         markFailed(entry.id, `Enrichment error: ${err}`);
       }
-    }
+    });
     saveArticleQueue();
 
     const toSummarize = getEntriesByState('enriched');
-    for (const entry of toSummarize) {
+    await runWithConcurrency(toSummarize, config.summarizeConcurrency, async (entry) => {
       const summary = await summarizeEntry(entry);
       if (summary) {
         transitionEntry(entry.id, 'summarized', { structuredSummary: summary });
@@ -157,8 +207,8 @@ async function pollAndNotify(): Promise<void> {
         markFailed(entry.id, 'Summarization failed');
         metrics.summary_failed++;
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
+      await delay(config.summarizeDelayMs);
+    });
     saveArticleQueue();
 
     const toSend = getEntriesByState('summarized');
@@ -168,8 +218,6 @@ async function pollAndNotify(): Promise<void> {
     const { labels } = getLanguagePack(runtimeConfig.language);
 
     if (runtimeConfig.noPush) {
-      log.info('=== TERMINAL OUTPUT (no Pushover) ===');
-
       for (const entry of regularToSend) {
         if (!entry.structuredSummary) {
           markFailed(entry.id, 'No structured summary available');
@@ -178,23 +226,27 @@ async function pollAndNotify(): Promise<void> {
         }
 
         const s = entry.structuredSummary;
-        console.log('');
-        console.log(`\x1b[1m\x1b[36m${s.translated_title}\x1b[0m`);
-        console.log(`  📰 ${entry.feedName}`);
-        console.log(`  ${labels.whatHappened} ${s.what_happened}`);
-        console.log(`  ${labels.whyItMatters} ${s.why_it_matters}`);
-        console.log(`  💡 ${s.key_detail}`);
-        console.log(`  🔗 ${entry.link}`);
+        result.summaries.push({
+          id: entry.id,
+          title: s.translated_title || entry.title,
+          feedName: entry.feedName,
+          link: entry.link,
+          whatHappened: s.what_happened,
+          whyItMatters: s.why_it_matters,
+          keyDetail: s.key_detail,
+          isArxiv: false,
+        });
 
         transitionEntry(entry.id, 'sent');
         metrics.sent++;
       }
+      saveArticleQueue();
     } else {
-      for (const entry of regularToSend) {
+      await runWithConcurrency(regularToSend, config.sendConcurrency, async (entry) => {
         if (!entry.structuredSummary) {
           markFailed(entry.id, 'No structured summary available');
           metrics.send_failed++;
-          continue;
+          return;
         }
 
         const { success, truncated } = await sendArticleNotification(entry, entry.structuredSummary);
@@ -207,8 +259,8 @@ async function pollAndNotify(): Promise<void> {
           metrics.send_failed++;
         }
 
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+        await delay(config.sendDelayMs);
+      });
     }
 
     const now = Date.now();
@@ -217,10 +269,16 @@ async function pollAndNotify(): Promise<void> {
     if (runtimeConfig.noPush) {
       for (const entry of arxivReady) {
         const s = entry.structuredSummary!;
-        console.log('');
-        console.log(`\x1b[1m\x1b[36m📄 ${s.translated_title}\x1b[0m`);
-        console.log(`  ${labels.whatHappened} ${s.what_happened}`);
-        console.log(`  🔗 ${entry.link}`);
+        result.summaries.push({
+          id: entry.id,
+          title: s.translated_title || entry.title,
+          feedName: entry.feedName,
+          link: entry.link,
+          whatHappened: s.what_happened,
+          whyItMatters: '',
+          keyDetail: '',
+          isArxiv: true,
+        });
 
         transitionEntry(entry.id, 'sent');
         metrics.sent++;
@@ -274,9 +332,11 @@ async function pollAndNotify(): Promise<void> {
 
     emitMetrics(metrics);
     log.info(`Poll cycle complete: ${metrics.sent} sent, ${metrics.queue_pending} pending`);
+    return result;
   } catch (err) {
     log.error('Error in poll cycle', err);
     saveArticleQueue();
+    return result;
   }
 }
 
@@ -309,6 +369,25 @@ async function main(): Promise<void> {
   log.info(`Newscrux v2.0 starting... (language: ${pack.name}, provider: ${runtimeConfig.provider}, noPush: ${runtimeConfig.noPush})`);
   validateConfig();
   setupShutdown();
+
+  initializeFromConfig(config.feeds);
+
+  if (args.web) {
+    const app = createApi();
+    const port = args.port || 3000;
+    app.listen(port, () => {
+      log.info(`Web server running on http://localhost:${port}`);
+    });
+
+    if (!runtimeConfig.noPush) {
+      await sendNotification(
+        '📡 Newscrux',
+        pack.labels.startupMessage,
+      );
+    }
+
+    return;
+  }
 
   if (!runtimeConfig.noPush) {
     const startupSent = await sendNotification(

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Newscrux - AI News Aggregator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; line-height: 1.6; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    header { margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; }
+    h1 { color: #58a6ff; font-size: 28px; }
+    .btn { background: #58a6ff; color: #0d1117; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; }
+    .btn:hover { background: #79b8ff; }
+    .btn:disabled { background: #3d4150; cursor: not-allowed; color: #6e7681; }
+    .section { background: #161b22; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+    .section h2 { margin-bottom: 15px; color: #c9d1d9; font-size: 18px; }
+    .feed-form { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 10px; align-items: end; margin-bottom: 15px; }
+    .form-group label { display: block; margin-bottom: 5px; color: #8b949e; font-size: 12px; }
+    .form-group input, .form-group select { width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #c9d1d9; font-size: 14px; }
+    .form-group input:focus, .form-group select:focus { outline: none; border-color: #58a6ff; }
+    .btn-group { display: flex; gap: 10px; }
+    .feed-list { max-height: 400px; overflow-y: auto; border: 1px solid #30363d; border-radius: 4px; }
+    .feed-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #21262d; }
+    .feed-item:last-child { border-bottom: none; }
+    .feed-item-info h3 { font-size: 14px; margin-bottom: 4px; color: #c9d1d9; }
+    .feed-item-info p { font-size: 12px; color: #8b949e; margin: 0; }
+    .feed-item-actions { display: flex; gap: 8px; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .btn-danger { background: #f85149; color: #ffffff; }
+    .btn-danger:hover { background: #da3633; }
+    .summaries { margin-top: 30px; }
+    .summary-item { background: #161b22; border-radius: 6px; padding: 16px; margin-bottom: 16px; border-left: 3px solid #58a6ff; }
+    .summary-item h3 { color: #58a6ff; font-size: 16px; margin-bottom: 10px; }
+    .summary-item .what, .summary-item .why, .summary-item .detail { margin-bottom: 8px; }
+    .summary-item label { color: #8b949e; font-size: 12px; display: block; margin-bottom: 4px; }
+    .summary-item p { color: #c9d1d9; margin: 0; }
+    .summary-item a { color: #58a6ff; text-decoration: none; }
+    .summary-item a:hover { text-decoration: underline; }
+    .loading { text-align: center; padding: 40px; color: #8b949e; }
+    .error { color: #f85149; background: #f851491a; padding: 12px; border-radius: 4px; margin-bottom: 16px; }
+    .summary-card { background: #161b22; border-radius: 8px; padding: 20px; margin-bottom: 16px; border: 1px solid #30363d; }
+    .summary-header { display: flex; gap: 8px; margin-bottom: 12px; }
+    .feed-badge { background: #58a6ff20; color: #58a6ff; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+    .arxiv-badge { background: #a371f720; color: #a371f7; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+    .summary-card h3 { color: #c9d1d9; font-size: 18px; margin-bottom: 16px; line-height: 1.4; }
+    .summary-content { margin-bottom: 16px; }
+    .summary-content p { margin-bottom: 12px; color: #c9d1d9; }
+    .summary-content strong { color: #8b949e; }
+    .summary-footer { border-top: 1px solid #30363d; padding-top: 12px; }
+    .read-more { color: #58a6ff; text-decoration: none; font-size: 14px; }
+    .read-more:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>📰 Newscrux</h1>
+      <div class="btn-group">
+        <button id="exportBtn" class="btn btn-sm">Export OPML</button>
+        <button id="showSummariesBtn" class="btn btn-sm">Show Existing</button>
+        <button id="pollBtn" class="btn">Pull & Summarize</button>
+      </div>
+    </header>
+
+    <section class="section">
+      <h2>📥 Import Feeds</h2>
+      <div class="feed-form">
+        <div class="form-group">
+          <label>OPML File</label>
+          <input type="file" id="opmlFile" accept=".opml,.xml">
+        </div>
+        <div class="form-group">
+          <label>Title (optional)</label>
+          <input type="text" id="opmlTitle" placeholder="My Feeds">
+        </div>
+        <button id="importBtn" class="btn">Import</button>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>➕ Add Feed</h2>
+      <div class="feed-form">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="feedName" placeholder="Example Blog">
+        </div>
+        <div class="form-group">
+          <label>URL</label>
+          <input type="url" id="feedUrl" placeholder="https://example.com/feed.xml">
+        </div>
+        <div class="form-group">
+          <label>Kind</label>
+          <select id="feedKind">
+            <option value="official_blog">Official Blog</option>
+            <option value="media">Media</option>
+            <option value="research">Research</option>
+            <option value="newsletter">Newsletter</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Priority</label>
+          <select id="feedPriority">
+            <option value="high">High</option>
+            <option value="normal" selected>Normal</option>
+          </select>
+        </div>
+        <button id="addFeedBtn" class="btn">Add Feed</button>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>📋 Feeds (<span id="feedCount">0</span>)</h2>
+      <div id="feedList" class="feed-list">
+        <div class="loading">Loading feeds...</div>
+      </div>
+    </section>
+
+    <section class="section summaries">
+      <h2>📝 Summaries</h2>
+      <div id="summaries">
+        <p style="text-align: center; color: #8b949e;">No summaries yet. Click "Pull & Summarize" to fetch articles.</p>
+      </div>
+    </section>
+  </div>
+
+  <script src="frontend.js"></script>
+</body>
+</html>

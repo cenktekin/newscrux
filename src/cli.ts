@@ -27,6 +27,8 @@ Usage: newscrux [options]
   -l, --lang <code>      Summary language: ${SUPPORTED_LANGUAGES.join(', ')} (default: "en")
   -p, --provider <type>  AI provider: openrouter, ollama (default: "openrouter")
   --no-push              Skip Pushover notifications, show results in terminal only
+  --web                  Start web server for feed management
+  --port <number>         Web server port (default: 3000)
   -h, --help             Show this help message
   -v, --version          Show version number
 
@@ -45,14 +47,18 @@ Examples:
   newscrux -l de          Start with German summaries
   newscrux -p ollama      Use local Ollama model
   newscrux --no-push      Run once, show results in terminal only
+  newscrux --web          Start web server for feed management
+  newscrux --web --port 8080  Start web server on port 8080
   newscrux              Start with English summaries (default)`);
 }
 
-export function parseArgs(): { lang: SupportedLanguage; provider: 'openrouter' | 'ollama'; noPush: boolean } {
+export function parseArgs(): { lang: SupportedLanguage; provider: 'openrouter' | 'ollama'; noPush: boolean; web: boolean; port: number } {
   const args = process.argv.slice(2);
   let lang: SupportedLanguage = 'en';
   let provider: 'openrouter' | 'ollama' = config.aiProvider;
   let noPush = false;
+  let web = false;
+  let port = 3000;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -126,7 +132,41 @@ export function parseArgs(): { lang: SupportedLanguage; provider: 'openrouter' |
       noPush = true;
       continue;
     }
+
+    // --web flag
+    if (arg === '--web') {
+      web = true;
+      continue;
+    }
+
+    // --port=xx format
+    if (arg.startsWith('--port=')) {
+      const value = parseInt(arg.split('=')[1], 10);
+      if (isNaN(value) || value < 1 || value > 65535) {
+        console.error(`Error: Invalid port number "${value}". Must be between 1 and 65535.`);
+        process.exit(1);
+      }
+      port = value;
+      continue;
+    }
+
+    // --port xx format
+    if (arg === '--port') {
+      const value = args[i + 1];
+      if (!value || value.startsWith('-')) {
+        console.error(`Error: --port requires a port number.`);
+        process.exit(1);
+      }
+      const portNum = parseInt(value, 10);
+      if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+        console.error(`Error: Invalid port number "${portNum}". Must be between 1 and 65535.`);
+        process.exit(1);
+      }
+      port = portNum;
+      i++;
+      continue;
+    }
   }
 
-  return { lang, provider, noPush };
+  return { lang, provider, noPush, web, port };
 }

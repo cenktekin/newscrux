@@ -112,7 +112,10 @@ export function saveArticleQueue(): void {
 }
 
 export function getQueue(): ArticleQueue {
-  if (!_queue) throw new Error('Queue not loaded. Call loadArticleQueue() first.');
+  if (!_queue) {
+    _queue = loadQueue();
+    cleanupOldEntries(_queue);
+  }
   return _queue;
 }
 
@@ -203,7 +206,9 @@ export function markFailed(id: string, error: string): void {
     entry.state = 'failed';
     log.warn(`Entry ${id} failed permanently after ${MAX_RETRIES} attempts: ${error}`);
   } else {
-    if (entry.enrichedContent) {
+    if (entry.structuredSummary) {
+      entry.state = 'summarized';
+    } else if (entry.enrichedContent) {
       entry.state = 'enriched';
     } else {
       entry.state = 'discovered';

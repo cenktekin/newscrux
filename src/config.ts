@@ -4,32 +4,68 @@ import { join } from 'node:path';
 import type { FeedConfig } from './types.js';
 import type { SupportedLanguage } from './i18n.js';
 
+function toPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = parseInt(value || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function toNonNegativeInt(value: string | undefined, fallback: number): number {
+  const parsed = parseInt(value || '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function toBool(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  const normalized = value.toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+  return fallback;
+}
+
+function toFloatInRange(value: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
 export const config = {
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
   openrouterModel: process.env.OPENROUTER_MODEL || 'deepseek/deepseek-v3.2-speciale',
   pushoverUserKey: process.env.PUSHOVER_USER_KEY || '',
   pushoverAppToken: process.env.PUSHOVER_APP_TOKEN || '',
-  pollIntervalMinutes: parseInt(process.env.POLL_INTERVAL_MINUTES || '15', 10),
-  maxArticlesPerPoll: parseInt(process.env.MAX_ARTICLES_PER_POLL || '10', 10),
+  pollIntervalMinutes: toPositiveInt(process.env.POLL_INTERVAL_MINUTES, 15),
+  maxArticlesPerPoll: toPositiveInt(process.env.MAX_ARTICLES_PER_POLL, 10),
   logLevel: (process.env.LOG_LEVEL || 'info') as 'debug' | 'info' | 'warn' | 'error',
   dataDir: join(process.cwd(), 'data'),
 
   /** Per-poll processing limit for arXiv articles (overflow stays in queue) */
-  arxivMaxPerPoll: parseInt(process.env.ARXIV_MAX_PER_POLL || '15', 10),
+  arxivMaxPerPoll: toPositiveInt(process.env.ARXIV_MAX_PER_POLL, 15),
   /** Feed name prefix to identify arXiv feeds */
   arxivFeedPrefix: 'arXiv ',
 
   /** AI relevance score threshold (1-10). Articles below this are filtered out. */
-  relevanceThreshold: parseInt(process.env.RELEVANCE_THRESHOLD || '6', 10),
+  relevanceThreshold: toPositiveInt(process.env.RELEVANCE_THRESHOLD, 6),
+  /** Max discovered entries scored by relevance in one cycle */
+  relevanceBatchSize: toPositiveInt(process.env.RELEVANCE_BATCH_SIZE, 100),
 
   /** Minimum snippet length to skip scraping (chars) */
-  snippetMinLength: 300,
+  snippetMinLength: toPositiveInt(process.env.SNIPPET_MIN_LENGTH, 300),
   /** Max enriched content length sent to summarizer (chars) */
-  enrichedContentMaxLength: 3000,
+  enrichedContentMaxLength: toPositiveInt(process.env.ENRICHED_CONTENT_MAX_LENGTH, 3000),
+  /** Enable full-page scraping when snippets are short */
+  scrapingEnabled: toBool(process.env.SCRAPING_ENABLED, true),
   /** Scraping timeout per request (ms) */
-  scrapingTimeoutMs: 10000,
+  scrapingTimeoutMs: toPositiveInt(process.env.SCRAPING_TIMEOUT_MS, 10000),
   /** Rate limit delay between scraping requests to same domain (ms) */
-  scrapingDomainDelayMs: 2000,
+  scrapingDomainDelayMs: toNonNegativeInt(process.env.SCRAPING_DOMAIN_DELAY_MS, 2000),
+
+  /** Parallel worker counts for pipeline stages */
+  enrichConcurrency: toPositiveInt(process.env.ENRICH_CONCURRENCY, 4),
+  summarizeConcurrency: toPositiveInt(process.env.SUMMARIZE_CONCURRENCY, 2),
+  sendConcurrency: toPositiveInt(process.env.SEND_CONCURRENCY, 3),
+  /** Optional delay after summarization/send operation (ms) */
+  summarizeDelayMs: toNonNegativeInt(process.env.SUMMARIZE_DELAY_MS, 0),
+  sendDelayMs: toNonNegativeInt(process.env.SEND_DELAY_MS, 0),
 
   /** AI provider: 'openrouter' or 'ollama' */
   aiProvider: (process.env.AI_PROVIDER || 'openrouter') as 'openrouter' | 'ollama',
@@ -37,6 +73,13 @@ export const config = {
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1',
   /** Ollama model name (default: deepseek-qwen-8b:latest) */
   ollamaModel: process.env.OLLAMA_MODEL || 'deepseek-qwen-8b:latest',
+  /** Ollama generation params */
+  ollamaTemperature: toFloatInRange(process.env.OLLAMA_TEMPERATURE, 0.2, 0, 2),
+  ollamaThink: toBool(process.env.OLLAMA_THINK, false),
+  ollamaSummaryMaxTokens: toPositiveInt(process.env.OLLAMA_SUMMARY_MAX_TOKENS, 260),
+  ollamaRelevanceMaxTokens: toPositiveInt(process.env.OLLAMA_RELEVANCE_MAX_TOKENS, 1200),
+  ollamaTimeoutMs: toPositiveInt(process.env.OLLAMA_TIMEOUT_MS, 45000),
+  ollamaMaxRetries: toNonNegativeInt(process.env.OLLAMA_MAX_RETRIES, 2),
 
   feeds: [
     // Official blogs (high priority — bypass relevance filter)

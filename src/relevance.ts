@@ -11,18 +11,22 @@ const openrouter = new OpenRouter({
   apiKey: config.openrouterApiKey,
 });
 
-const RELEVANCE_PROMPT = `Sen bir AI/ML haber filtresisin.
-Sana makale başlıkları ve açıklamaları verilecek.
-Her makale için 1-10 arası bir "ilgililik puanı" ver.
-Puanlama kriteri: makale yapay zeka, makine öğrenmesi, derin öğrenme, LLM, NLP, bilgisayarlı görü, robotik, AI donanımı/çipleri veya bu alanların doğrudan uygulamalarıyla ilgiliyse yüksek puan ver.
-Genel teknoloji, iklim, biyoteknoloji, uzay, politika gibi AI ile doğrudan ilgisi olmayan konulara düşük puan ver.
+const RELEVANCE_PROMPT = `You are an AI/ML news filter. Score each article's relevance to AI/ML topics (LLMs, GPT, deep learning, NLP, computer vision, robotics, AI hardware, etc). General tech, climate, politics get low scores.
 
-Yanıtını SADECE şu JSON formatında ver, başka metin ekleme:
-[{"id": 0, "score": 8}, {"id": 1, "score": 3}, ...]
+Output ONLY a JSON array with no other text. Example:
+[{"id":0,"score":8},{"id":1,"score":3}]
 
-id = makalenin sıra numarası (0'dan başlar), score = 1-10 arası puan.`;
+Score 1-10 where 1=not AI-related, 10=highly AI-related. Only output the JSON array.`;
 
 const MAX_RETRIES = 2;
+const RELEVANCE_KEYWORDS = [
+  'ai', 'artificial intelligence', 'machine learning', 'ml', 'deep learning', 'llm', 'gpt', 'transformer',
+  'nlp', 'computer vision', 'robotics', 'speech model', 'neural', 'inference', 'fine-tuning',
+  'openai', 'deepmind', 'anthropic', 'gemini', 'mistral', 'arxiv', 'gpu', 'npu', 'cuda',
+];
+const NEGATIVE_KEYWORDS = [
+  'climate', 'weather', 'sports', 'celebrity', 'politics', 'election', 'war', 'movie', 'music', 'recipe',
+];
 
 async function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -33,6 +37,39 @@ export interface RelevanceResult {
   dropped: Array<{ entry: QueueEntry; score: number }>;
   bypassed: QueueEntry[];
   parseError: boolean;
+}
+
+function keywordScore(entry: QueueEntry): number {
+  const text = `${entry.title} ${entry.snippet}`.toLowerCase();
+  let score = 1;
+  for (const keyword of RELEVANCE_KEYWORDS) {
+    if (text.includes(keyword)) score += 1;
+  }
+  for (const keyword of NEGATIVE_KEYWORDS) {
+    if (text.includes(keyword)) score -= 1;
+  }
+  return Math.max(1, Math.min(10, score));
+}
+
+function buildKeywordFallbackResult(toScore: QueueEntry[], bypassed: QueueEntry[]): RelevanceResult {
+  const threshold = config.relevanceThreshold;
+  const passed: QueueEntry[] = [];
+  const dropped: Array<{ entry: QueueEntry; score: number }> = [];
+
+  for (const entry of toScore) {
+    const score = keywordScore(entry);
+    if (score >= threshold) {
+      passed.push(entry);
+    } else {
+      dropped.push({ entry, score });
+    }
+  }
+
+  log.warn(
+    `Relevance fallback keyword mode: passed=${passed.length}/${toScore.length}, dropped=${dropped.length}, threshold=${threshold}`
+  );
+
+  return { passed, dropped, bypassed, parseError: true };
 }
 
 export async function filterByRelevance(entries: QueueEntry[]): Promise<RelevanceResult> {
@@ -62,7 +99,12 @@ export async function filterByRelevance(entries: QueueEntry[]): Promise<Relevanc
   let text: string;
 
   if (runtimeConfig.provider === 'ollama') {
-    text = await callOllama(list, RELEVANCE_PROMPT);
+    const ollamaPrompt = config.ollamaThink
+      ? RELEVANCE_PROMPT
+      : `${RELEVANCE_PROMPT}\n\nÖnemli: Düşünme metni yazma. Sadece JSON array döndür.`;
+    text = await callOllama(list, ollamaPrompt, {
+      maxTokens: config.ollamaRelevanceMaxTokens,
+    });
   } else {
     let openrouterText: string | null = null;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -108,10 +150,16 @@ export async function filterByRelevance(entries: QueueEntry[]): Promise<Relevanc
   const jsonMatch = text.match(/\[[\s\S]*\]/);
   if (!jsonMatch) {
     log.warn('No JSON array found in relevance response');
-    return { passed: [], dropped: [], bypassed, parseError: true };
+    return buildKeywordFallbackResult(toScore, bypassed);
   }
 
-  const parsed = JSON.parse(jsonMatch[0]) as Array<{ id: number; score: number }>;
+  let parsed: Array<{ id: number; score: number }>;
+  try {
+    parsed = JSON.parse(jsonMatch[0]) as Array<{ id: number; score: number }>;
+  } catch (err) {
+    log.warn(`Invalid relevance JSON, using keyword fallback: ${err}`);
+    return buildKeywordFallbackResult(toScore, bypassed);
+  }
   const scores = new Map<number, number>();
   for (const entry of parsed) {
     if (typeof entry.id === 'number' && typeof entry.score === 'number') {

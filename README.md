@@ -193,13 +193,30 @@ newscrux                # Start with English summaries (default)
 | `AI_PROVIDER` | No | `openrouter` | AI provider: `openrouter`, `ollama` |
 | `OLLAMA_BASE_URL` | No | `http://localhost:11434/v1` | Ollama API URL |
 | `OLLAMA_MODEL` | No | `deepseek-qwen-8b:latest` | Ollama model name |
+| `OLLAMA_TEMPERATURE` | No | `0.2` | Ollama sampling temperature |
+| `OLLAMA_THINK` | No | `false` | Enable/disable reasoning-heavy output |
+| `OLLAMA_SUMMARY_MAX_TOKENS` | No | `260` | Max tokens for summary generation |
+| `OLLAMA_RELEVANCE_MAX_TOKENS` | No | `1200` | Max tokens for relevance scoring output |
+| `OLLAMA_TIMEOUT_MS` | No | `45000` | Ollama request timeout in milliseconds |
+| `OLLAMA_MAX_RETRIES` | No | `2` | Retry count for failed/empty Ollama responses |
 
 | `PUSHOVER_APP_TOKEN` | Yes | — | Pushover app token |
 | `OPENROUTER_MODEL` | No | `deepseek/deepseek-v3.2-speciale` | AI model for summarization |
 | `POLL_INTERVAL_MINUTES` | No | `15` | Minutes between feed polls |
 | `MAX_ARTICLES_PER_POLL` | No | `10` | Max regular articles processed per cycle |
 | `ARXIV_MAX_PER_POLL` | No | `15` | Max arXiv papers processed per cycle |
+| `ENRICH_CONCURRENCY` | No | `4` | Parallel workers for enrichment stage |
+| `SUMMARIZE_CONCURRENCY` | No | `2` | Parallel workers for summarization stage |
+| `SEND_CONCURRENCY` | No | `3` | Parallel workers for send stage |
+| `SUMMARIZE_DELAY_MS` | No | `0` | Delay after each summary (ms) |
+| `SEND_DELAY_MS` | No | `0` | Delay after each send (ms) |
+| `SNIPPET_MIN_LENGTH` | No | `300` | Skip scraping when snippet length is at least this many chars |
+| `ENRICHED_CONTENT_MAX_LENGTH` | No | `3000` | Max content chars passed to summarizer |
+| `SCRAPING_ENABLED` | No | `true` | Enable/disable full-page scraping fallback |
+| `SCRAPING_TIMEOUT_MS` | No | `10000` | Scraping request timeout in ms |
+| `SCRAPING_DOMAIN_DELAY_MS` | No | `2000` | Delay between requests to same domain in ms |
 | `RELEVANCE_THRESHOLD` | No | `6` | Minimum AI relevance score (1–10) |
+| `RELEVANCE_BATCH_SIZE` | No | `100` | Max discovered entries scored by relevance per cycle |
 | `LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 ---

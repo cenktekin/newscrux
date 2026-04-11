@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "knownArticleIds": [],
+  "entries": [
+    {
+      "id": "test-article-001",
+      "title": "Test: OpenAI's Revolutionary AI Model",
+      "link": "https://example.com/test-article",
+      "feedName": "OpenAI News",
+      "feedUrl": "https://example.com/feed.xml",
+      "publishedAt": "2026-03-19T10:00:00.000Z",
+      "snippet": "OpenAI announces revolutionary new model.",
+      "state": "summarized",
+      "structuredSummary": {
+        "what_happened": "OpenAI announced a new AI model with breakthrough reasoning capabilities.",
+        "why_it_matters": "This represents a significant leap in AI capabilities.",
+        "key_detail": "The model demonstrates 40% improvement on reasoning benchmarks."
+      },
+      "createdAt": "2026-03-19T10:00:00.000Z"
+    }
+  ]
+}
