@@ -1,6 +1,6 @@
 // src/config.ts
 import 'dotenv/config';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { FeedConfig } from './types.js';
 import type { SupportedLanguage } from './i18n.js';
 
@@ -29,14 +29,30 @@ function toFloatInRange(value: string | undefined, fallback: number, min: number
 }
 
 export const config = {
-  openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
-  openrouterModel: process.env.OPENROUTER_MODEL || 'deepseek/deepseek-v3.2-speciale',
+  /** Merkezi LLM gateway (Karargah / shared/llm) */
+  llmGatewayUrl: process.env.LLM_GATEWAY_URL || 'http://127.0.0.1:7799',
+  llmTemperature: toFloatInRange(process.env.LLM_TEMPERATURE, 0.2, 0, 2),
+  llmSummaryMaxTokens: toPositiveInt(process.env.LLM_SUMMARY_MAX_TOKENS, 600),
+  llmRelevanceMaxTokens: toPositiveInt(process.env.LLM_RELEVANCE_MAX_TOKENS, 1200),
+  llmTimeoutMs: toPositiveInt(process.env.LLM_TIMEOUT_MS, 60000),
+  llmMaxRetries: toNonNegativeInt(process.env.LLM_MAX_RETRIES, 2),
   pushoverUserKey: process.env.PUSHOVER_USER_KEY || '',
   pushoverAppToken: process.env.PUSHOVER_APP_TOKEN || '',
   pollIntervalMinutes: toPositiveInt(process.env.POLL_INTERVAL_MINUTES, 15),
   maxArticlesPerPoll: toPositiveInt(process.env.MAX_ARTICLES_PER_POLL, 10),
   logLevel: (process.env.LOG_LEVEL || 'info') as 'debug' | 'info' | 'warn' | 'error',
-  dataDir: join(process.cwd(), 'data'),
+  /** Queue/data directory. DATA_DIR overrides it (used by tests for isolation). */
+  dataDir: process.env.DATA_DIR ? resolve(process.env.DATA_DIR) : join(process.cwd(), 'data'),
+
+  /** Web UI bind address. Loopback by default; exposing it needs WEB_HOST + API_TOKEN. */
+  webHost: process.env.WEB_HOST || '127.0.0.1',
+  /** Bearer token required for non-GET /api requests that do not come from loopback. */
+  apiToken: process.env.API_TOKEN || '',
+  /** Extra browser origins allowed by CORS (comma separated). Localhost is always allowed. */
+  allowedOrigins: (process.env.WEB_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean),
 
   /** Per-poll processing limit for arXiv articles (overflow stays in queue) */
   arxivMaxPerPoll: toPositiveInt(process.env.ARXIV_MAX_PER_POLL, 15),
@@ -67,20 +83,6 @@ export const config = {
   summarizeDelayMs: toNonNegativeInt(process.env.SUMMARIZE_DELAY_MS, 0),
   sendDelayMs: toNonNegativeInt(process.env.SEND_DELAY_MS, 0),
 
-  /** AI provider: 'openrouter' or 'ollama' */
-  aiProvider: (process.env.AI_PROVIDER || 'openrouter') as 'openrouter' | 'ollama',
-  /** Ollama base URL (default: http://localhost:11434/v1) */
-  ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1',
-  /** Ollama model name (default: deepseek-qwen-8b:latest) */
-  ollamaModel: process.env.OLLAMA_MODEL || 'deepseek-qwen-8b:latest',
-  /** Ollama generation params */
-  ollamaTemperature: toFloatInRange(process.env.OLLAMA_TEMPERATURE, 0.2, 0, 2),
-  ollamaThink: toBool(process.env.OLLAMA_THINK, false),
-  ollamaSummaryMaxTokens: toPositiveInt(process.env.OLLAMA_SUMMARY_MAX_TOKENS, 260),
-  ollamaRelevanceMaxTokens: toPositiveInt(process.env.OLLAMA_RELEVANCE_MAX_TOKENS, 1200),
-  ollamaTimeoutMs: toPositiveInt(process.env.OLLAMA_TIMEOUT_MS, 45000),
-  ollamaMaxRetries: toNonNegativeInt(process.env.OLLAMA_MAX_RETRIES, 2),
-
   feeds: [
     // Official blogs (high priority — bypass relevance filter)
     { name: 'OpenAI News', url: 'https://openai.com/news/rss.xml', kind: 'official_blog', priority: 'high' },
@@ -103,8 +105,7 @@ export const config = {
 } as const;
 
 // Mutable runtime config (set by CLI args at startup)
-export const runtimeConfig: { language: SupportedLanguage; provider: 'openrouter' | 'ollama'; noPush: boolean } = {
+export const runtimeConfig: { language: SupportedLanguage; noPush: boolean } = {
   language: 'en',
-  provider: 'openrouter',
   noPush: false,
 };

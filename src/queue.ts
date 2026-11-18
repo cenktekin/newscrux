@@ -14,20 +14,66 @@ const MAX_RETRIES = 3;
 
 // --- Persistence (atomic write) ---
 
+const VALID_STATES: ReadonlySet<ArticleState> = new Set([
+  'discovered', 'enriched', 'summarized', 'sent', 'failed',
+]);
+
+/**
+ * Validates a parsed queue file. Returns the typed queue when the shape is
+ * usable, or null when the file must be quarantined (silent reset is not OK).
+ */
+export function validateQueue(value: unknown): ArticleQueue | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const queue = value as Partial<ArticleQueue>;
+
+  if (!queue.entries || typeof queue.entries !== 'object' || Array.isArray(queue.entries)) return null;
+  if (typeof queue.lastCleanup !== 'number' || !Number.isFinite(queue.lastCleanup)) return null;
+  if (typeof queue.coldStartDone !== 'boolean') return null;
+
+  for (const [id, rawEntry] of Object.entries(queue.entries)) {
+    if (!rawEntry || typeof rawEntry !== 'object') return null;
+    const entry = rawEntry as Partial<QueueEntry>;
+    if (entry.id !== id) return null;
+    if (typeof entry.state !== 'string' || !VALID_STATES.has(entry.state as ArticleState)) return null;
+    if (typeof entry.title !== 'string' || typeof entry.link !== 'string') return null;
+    if (typeof entry.discoveredAt !== 'number' || typeof entry.lastUpdatedAt !== 'number') return null;
+  }
+
+  return queue as ArticleQueue;
+}
+
+function freshQueue(): ArticleQueue {
+  return { entries: {}, lastCleanup: Date.now(), coldStartDone: false };
+}
+
+function quarantineQueue(reason: string): void {
+  const backup = `${QUEUE_FILE}.corrupt-${Date.now()}.json`;
+  try {
+    renameSync(QUEUE_FILE, backup);
+    log.error(`Queue file ${reason}; moved to ${backup} and starting fresh`);
+  } catch (err) {
+    log.error(`Queue file ${reason}; could not quarantine it`, err);
+  }
+}
+
 function loadQueue(): ArticleQueue {
   // Migration: if old seen-articles.json exists, import it
   if (!existsSync(QUEUE_FILE) && existsSync(LEGACY_SEEN_FILE)) {
     return migrateFromSeen();
   }
 
+  if (!existsSync(QUEUE_FILE)) return freshQueue();
+
   try {
-    if (existsSync(QUEUE_FILE)) {
-      return JSON.parse(readFileSync(QUEUE_FILE, 'utf-8'));
-    }
-  } catch {
-    log.warn('Queue file could not be read, starting fresh');
+    const parsed: unknown = JSON.parse(readFileSync(QUEUE_FILE, 'utf-8'));
+    const valid = validateQueue(parsed);
+    if (valid) return valid;
+    quarantineQueue('failed schema validation');
+  } catch (err) {
+    quarantineQueue(`could not be read/parsed (${err instanceof Error ? err.message : String(err)})`);
   }
-  return { entries: {}, lastCleanup: Date.now(), coldStartDone: false };
+
+  return freshQueue();
 }
 
 function saveQueue(queue: ArticleQueue): void {

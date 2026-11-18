@@ -1,15 +1,10 @@
 // src/relevance.ts
-import { OpenRouter } from '@openrouter/sdk';
-import { config, runtimeConfig } from './config.js';
+import { config } from './config.js';
 import { createLogger } from './logger.js';
-import { callOllama } from './ollama.js';
+import { callLlm } from './llm.js';
 import type { QueueEntry } from './types.js';
 
 const log = createLogger('relevance');
-
-const openrouter = new OpenRouter({
-  apiKey: config.openrouterApiKey,
-});
 
 const RELEVANCE_PROMPT = `You are an AI/ML news filter. Score each article's relevance to AI/ML topics (LLMs, GPT, deep learning, NLP, computer vision, robotics, AI hardware, etc). General tech, climate, politics get low scores.
 
@@ -18,7 +13,6 @@ Output ONLY a JSON array with no other text. Example:
 
 Score 1-10 where 1=not AI-related, 10=highly AI-related. Only output the JSON array.`;
 
-const MAX_RETRIES = 2;
 const RELEVANCE_KEYWORDS = [
   'ai', 'artificial intelligence', 'machine learning', 'ml', 'deep learning', 'llm', 'gpt', 'transformer',
   'nlp', 'computer vision', 'robotics', 'speech model', 'neural', 'inference', 'fine-tuning',
@@ -98,53 +92,13 @@ export async function filterByRelevance(entries: QueueEntry[]): Promise<Relevanc
 
   let text: string;
 
-  if (runtimeConfig.provider === 'ollama') {
-    const ollamaPrompt = config.ollamaThink
-      ? RELEVANCE_PROMPT
-      : `${RELEVANCE_PROMPT}\n\nÖnemli: Düşünme metni yazma. Sadece JSON array döndür.`;
-    text = await callOllama(list, ollamaPrompt, {
-      maxTokens: config.ollamaRelevanceMaxTokens,
+  try {
+    text = await callLlm(list, RELEVANCE_PROMPT, {
+      maxTokens: config.llmRelevanceMaxTokens,
     });
-  } else {
-    let openrouterText: string | null = null;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const result = await openrouter.chat.send({
-          model: config.openrouterModel,
-          messages: [
-            { role: 'system', content: RELEVANCE_PROMPT },
-            { role: 'user', content: list },
-          ],
-        });
-
-        const rawContent = result.choices?.[0]?.message?.content;
-        if (typeof rawContent === 'string') {
-          openrouterText = rawContent;
-        } else if (Array.isArray(rawContent)) {
-          openrouterText = rawContent
-            .filter((item): item is { type: 'text'; text: string } => item.type === 'text')
-            .map(item => item.text)
-            .join('');
-        } else {
-          openrouterText = '';
-        }
-        break;
-      } catch (err) {
-        if (attempt < MAX_RETRIES) {
-          const backoffMs = Math.pow(2, attempt + 1) * 1000;
-          log.warn(`Relevance attempt ${attempt + 1} failed, retrying in ${backoffMs}ms: ${err}`);
-          await delay(backoffMs);
-        } else {
-          log.error('Relevance check failed after retries — entries stay discovered for retry', err);
-          return { passed: [], dropped: [], bypassed, parseError: true };
-        }
-      }
-    }
-
-    if (openrouterText === null) {
-      return { passed: [], dropped: [], bypassed, parseError: true };
-    }
-    text = openrouterText;
+  } catch (err) {
+    log.error('Relevance check failed after retries — entries stay discovered for retry', err);
+    return { passed: [], dropped: [], bypassed, parseError: true };
   }
 
   const jsonMatch = text.match(/\[[\s\S]*\]/);

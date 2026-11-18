@@ -2,6 +2,38 @@
 
 This document tracks all changes made to the original Newscrux repository.
 
+## Unreleased — 2026-11-04
+
+### Audit follow-up (2026-10-17 findings)
+
+#### Testing and CI
+- Added **Vitest** with 17 unit tests covering the queue state machine, dedup, notification rendering/truncation, and queue schema validation (`tests/`).
+- Added `npm run typecheck` (`tsc --noEmit`) and `npm test` / `npm run test:watch` scripts.
+- Added `.github/workflows/ci.yml`: install → typecheck → test → build on every push/PR (`npm ci --include=dev`).
+
+#### Security
+- `/api/*` mutations (`POST`/`PUT`/`DELETE`) are now restricted:
+  - loopback callers are trusted;
+  - remote callers must send `API_TOKEN` (`Authorization: Bearer <token>` or `X-Api-Token`), otherwise `403`;
+  - when `API_TOKEN` is configured, the token is always required (`401` otherwise).
+- CORS is no longer `*`: only localhost origins plus `WEB_ALLOWED_ORIGINS` are allowed.
+- The web server binds to `127.0.0.1` by default (`WEB_HOST` overrides), so `--web` no longer exposes the UI to the network unintentionally.
+
+#### Reliability
+- Queue file is now schema-validated on load. A corrupt/invalid file is **quarantined** to `article-queue.json.corrupt-<timestamp>` with an error log instead of being silently reset to an empty queue.
+- `DATA_DIR` environment variable allows relocating the queue (also used by tests for isolation).
+
+#### Observability
+- Added `GET /metrics` (Prometheus text format): last poll-cycle counters plus queue state counts.
+
+#### Documentation / hygiene
+- Repaired the broken CLI-options markdown block and documented `--web` / `--port`.
+- Removed stale Ollama/OpenRouter instructions; README now describes the central LLM gateway, Web UI/API routes, and the new environment variables.
+- Moved the stale root `article-queue.json` test fixture to `archive/`.
+
+#### Central LLM gateway
+- All AI calls now go through the central Karargah gateway (`LLM_GATEWAY_URL`, default `http://127.0.0.1:7799`); the per-provider Ollama/OpenRouter path was removed (`src/ollama.ts` deleted, `src/llm.ts` added).
+
 ## Version 2.0.1 - 2026-03-19
 
 ### New Features

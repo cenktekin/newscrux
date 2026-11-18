@@ -25,7 +25,6 @@ Usage: newscrux [options]
 
   Options:
   -l, --lang <code>      Summary language: ${SUPPORTED_LANGUAGES.join(', ')} (default: "en")
-  -p, --provider <type>  AI provider: openrouter, ollama (default: "openrouter")
   --no-push              Skip Pushover notifications, show results in terminal only
   --web                  Start web server for feed management
   --port <number>         Web server port (default: 3000)
@@ -33,11 +32,7 @@ Usage: newscrux [options]
   -v, --version          Show version number
 
 Environment variables (.env):
-  AI_PROVIDER            AI provider: openrouter, ollama (default: openrouter)
-  OPENROUTER_API_KEY    OpenRouter API key (required if provider=openrouter)
-  OPENROUTER_MODEL      AI model (default: deepseek/deepseek-v3.2-speciale)
-  OLLAMA_BASE_URL       Ollama API URL (default: http://localhost:11434/v1)
-  OLLAMA_MODEL          Ollama model name (default: deepseek-qwen-8b:latest)
+  LLM_GATEWAY_URL        Merkezi LLM gateway (default: http://127.0.0.1:7799)
   PUSHOVER_USER_KEY     Pushover user key (required)
   PUSHOVER_APP_TOKEN    Pushover app token (required)
   POLL_INTERVAL_MINUTES Poll interval in minutes (default: 15)
@@ -45,17 +40,15 @@ Environment variables (.env):
 Examples:
   newscrux --lang=tr      Start with Turkish summaries
   newscrux -l de          Start with German summaries
-  newscrux -p ollama      Use local Ollama model
   newscrux --no-push      Run once, show results in terminal only
   newscrux --web          Start web server for feed management
   newscrux --web --port 8080  Start web server on port 8080
   newscrux              Start with English summaries (default)`);
 }
 
-export function parseArgs(): { lang: SupportedLanguage; provider: 'openrouter' | 'ollama'; noPush: boolean; web: boolean; port: number } {
+export function parseArgs(): { lang: SupportedLanguage; noPush: boolean; web: boolean; port: number } {
   const args = process.argv.slice(2);
   let lang: SupportedLanguage = 'en';
-  let provider: 'openrouter' | 'ollama' = config.aiProvider;
   let noPush = false;
   let web = false;
   let port = 3000;
@@ -96,33 +89,6 @@ export function parseArgs(): { lang: SupportedLanguage; provider: 'openrouter' |
         process.exit(1);
       }
       lang = value as SupportedLanguage;
-      i++; // skip next arg (the value)
-      continue;
-    }
-
-    // --provider=xx format
-    if (arg.startsWith('--provider=')) {
-      const value = arg.split('=')[1];
-      if (value !== 'openrouter' && value !== 'ollama') {
-        console.error(`Error: Unsupported provider "${value}". Supported: openrouter, ollama`);
-        process.exit(1);
-      }
-      provider = value as 'openrouter' | 'ollama';
-      continue;
-    }
-
-    // --provider xx or -p xx format
-    if (arg === '--provider' || arg === '-p') {
-      const value = args[i + 1];
-      if (!value || value.startsWith('-')) {
-        console.error(`Error: --provider requires a provider. Supported: openrouter, ollama`);
-        process.exit(1);
-      }
-      if (value !== 'openrouter' && value !== 'ollama') {
-        console.error(`Error: Unsupported provider "${value}". Supported: openrouter, ollama`);
-        process.exit(1);
-      }
-      provider = value as 'openrouter' | 'ollama';
       i++; // skip next arg (the value)
       continue;
     }
@@ -168,5 +134,5 @@ export function parseArgs(): { lang: SupportedLanguage; provider: 'openrouter' |
     }
   }
 
-  return { lang, provider, noPush, web, port };
+  return { lang, noPush, web, port };
 }

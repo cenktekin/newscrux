@@ -1,16 +1,11 @@
 // src/summarizer.ts
-import { OpenRouter } from '@openrouter/sdk';
 import { config, runtimeConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { getLanguagePack } from './i18n.js';
-import { callOllama } from './ollama.js';
+import { callLlm } from './llm.js';
 import type { QueueEntry, StructuredSummary, FeedKind } from './types.js';
 
 const log = createLogger('summarizer');
-
-const openrouter = new OpenRouter({
-  apiKey: config.openrouterApiKey,
-});
 
 const KIND_TO_SOURCE_TYPE: Record<FeedKind, StructuredSummary['source_type']> = {
   official_blog: 'official_announcement',
@@ -18,24 +13,6 @@ const KIND_TO_SOURCE_TYPE: Record<FeedKind, StructuredSummary['source_type']> = 
   research: 'research',
   newsletter: 'newsletter',
 };
-
-const MAX_RETRIES = 1;
-
-async function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function extractResponseText(result: any): string {
-  const rawContent = result.choices?.[0]?.message?.content;
-  if (typeof rawContent === 'string') return rawContent;
-  if (Array.isArray(rawContent)) {
-    return rawContent
-      .filter((item: any): item is { type: 'text'; text: string } => item.type === 'text')
-      .map((item: any) => item.text)
-      .join('');
-  }
-  return '';
-}
 
 function parseAndValidateSummary(text: string, feedKind: FeedKind): StructuredSummary | null {
   try {
@@ -97,42 +74,13 @@ export async function summarizeEntry(entry: QueueEntry): Promise<StructuredSumma
 
   let text: string;
 
-  if (runtimeConfig.provider === 'ollama') {
-    const ollamaSystemPrompt = config.ollamaThink
-      ? systemPrompt
-      : `${systemPrompt}\n\nÖnemli: Düşünme / reasoning metni üretme. Yanıtı sadece istenen geçerli JSON olarak ver.`;
-    text = await callOllama(userContent, ollamaSystemPrompt, {
-      maxTokens: config.ollamaSummaryMaxTokens,
+  try {
+    text = await callLlm(userContent, systemPrompt, {
+      maxTokens: config.llmSummaryMaxTokens,
     });
-  } else {
-    let openrouterText: string | null = null;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const result = await openrouter.chat.send({
-          model: config.openrouterModel,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userContent },
-          ],
-        });
-
-        openrouterText = extractResponseText(result);
-        break;
-      } catch (err) {
-        if (attempt < MAX_RETRIES) {
-          log.warn(`Summarization attempt ${attempt + 1} failed for "${entry.title}", retrying: ${err}`);
-          await delay(Math.pow(2, attempt + 1) * 1000);
-        } else {
-          log.error(`Summarization failed after retries: ${entry.title}`, err);
-          return null;
-        }
-      }
-    }
-
-    if (openrouterText === null) {
-      return null;
-    }
-    text = openrouterText;
+  } catch (err) {
+    log.error(`Summarization failed after retries: ${entry.title}`, err);
+    return null;
   }
 
   const summary = parseAndValidateSummary(text, entry.feedKind);

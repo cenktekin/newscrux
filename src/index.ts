@@ -24,6 +24,7 @@ import { parseArgs } from './cli.js';
 import { getLanguagePack } from './i18n.js';
 import { createApi } from './api.js';
 import { initializeFromConfig, getFeeds } from './feeds-manager.js';
+import { recordMetrics } from './metrics-store.js';
 import type { PollMetrics } from './types.js';
 
 const log = createLogger('main');
@@ -55,10 +56,6 @@ async function runWithConcurrency<T>(
 }
 
 function validateConfig(): void {
-  if (runtimeConfig.provider === 'openrouter' && !config.openrouterApiKey) {
-    log.error('OPENROUTER_API_KEY is required when provider=openrouter. Set it in .env file.');
-    process.exit(1);
-  }
   if (!runtimeConfig.noPush && (!config.pushoverUserKey || !config.pushoverAppToken)) {
     log.error('PUSHOVER_USER_KEY and PUSHOVER_APP_TOKEN are required. Set them in .env file or use --no-push.');
     process.exit(1);
@@ -70,6 +67,7 @@ let lastArxivDigestTime = 0;
 const ARXIV_DIGEST_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 function emitMetrics(metrics: PollMetrics): void {
+  recordMetrics(pollCycleCount, metrics);
   const parts = Object.entries(metrics)
     .map(([k, v]) => `${k}=${v}`)
     .join(' ');
@@ -362,11 +360,10 @@ function setupShutdown(): void {
 async function main(): Promise<void> {
   const args = parseArgs();
   runtimeConfig.language = args.lang;
-  runtimeConfig.provider = args.provider;
   runtimeConfig.noPush = args.noPush;
 
   const pack = getLanguagePack(runtimeConfig.language);
-  log.info(`Newscrux v2.0 starting... (language: ${pack.name}, provider: ${runtimeConfig.provider}, noPush: ${runtimeConfig.noPush})`);
+  log.info(`Newscrux v2.0 starting... (language: ${pack.name}, llm: ${config.llmGatewayUrl}, noPush: ${runtimeConfig.noPush})`);
   validateConfig();
   setupShutdown();
 
@@ -375,8 +372,15 @@ async function main(): Promise<void> {
   if (args.web) {
     const app = createApi();
     const port = args.port || 3000;
-    app.listen(port, () => {
-      log.info(`Web server running on http://localhost:${port}`);
+    const host = config.webHost;
+    const isLoopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+
+    if (!isLoopback && !config.apiToken) {
+      log.warn('WEB_HOST is not loopback but API_TOKEN is empty — mutating API calls will be rejected. Set API_TOKEN before exposing the UI.');
+    }
+
+    app.listen(port, host, () => {
+      log.info(`Web server running on http://${host}:${port}`);
     });
 
     if (!runtimeConfig.noPush) {
