@@ -2,6 +2,16 @@
 
 This document tracks all changes made to the original Newscrux repository.
 
+## Unreleased — 2026-11-18
+
+### Multi-channel notifications (F1)
+
+- New `Notifier` interface in `src/notifiers/` with three implementations: `pushover`, `telegram`, `discord`.
+- `NOTIFY_CHANNELS` selects the active channels (default `pushover`); every enabled channel is validated at startup and missing credentials abort with a clear message.
+- Telegram gets an HTML payload (`parse_mode=HTML`) truncated to the 4096 character limit; Discord receives the rendered HTML converted to markdown and capped at 2000 characters.
+- Article, arXiv-digest and startup notifications are fanned out to all configured channels; `--no-push` behaves exactly as before.
+- 6 new fetch-mocked adapter tests (suite now 23 tests).
+
 ## Unreleased — 2026-11-04
 
 ### Audit follow-up (2026-10-17 findings)
