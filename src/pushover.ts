@@ -1,21 +1,11 @@
 // src/pushover.ts
 import { config, runtimeConfig } from './config.js';
-import { createLogger } from './logger.js';
 import { getLanguagePack } from './i18n.js';
+import { escapeHtml } from './notifiers/html.js';
+import { sendToAllNotifiers } from './notifiers/index.js';
 import type { QueueEntry, StructuredSummary } from './types.js';
 
-const log = createLogger('pushover');
-
-// --- HTML Escaping ---
-
-export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
+export { escapeHtml } from './notifiers/html.js';
 
 // --- Smart Truncation ---
 
@@ -94,44 +84,7 @@ export function renderNotification(entry: QueueEntry, summary: StructuredSummary
   return { title, message: message.slice(0, MAX_MESSAGE), truncated: true };
 }
 
-// --- Pushover API ---
-
-export async function sendNotification(
-  title: string,
-  message: string,
-  url?: string,
-  urlTitle?: string,
-): Promise<boolean> {
-  try {
-    const params: Record<string, string> = {
-      token: config.pushoverAppToken,
-      user: config.pushoverUserKey,
-      title: title.slice(0, 250),
-      message: message.slice(0, 1024),
-      html: '1',
-    };
-
-    if (url) params.url = url;
-    if (urlTitle) params.url_title = urlTitle;
-
-    const response = await fetch('https://api.pushover.net/1/messages.json', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(params),
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      log.error(`Pushover error (${response.status}): ${body}`);
-      return false;
-    }
-
-    return true;
-  } catch (err) {
-    log.error('Failed to send Pushover notification', err);
-    return false;
-  }
-}
+// --- Delivery ---
 
 export async function sendArticleNotification(
   entry: QueueEntry,
@@ -142,6 +95,6 @@ export async function sendArticleNotification(
   const { labels } = getLanguagePack(runtimeConfig.language);
   const urlTitle = isArxiv ? labels.readArticle : labels.readMore;
 
-  const success = await sendNotification(title, message, entry.link, urlTitle);
+  const success = await sendToAllNotifiers(title, message, entry.link, urlTitle);
   return { success, truncated };
 }

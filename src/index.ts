@@ -19,7 +19,8 @@ import {
   removeEntry,
   countByState,
 } from './queue.js';
-import { sendNotification, sendArticleNotification, escapeHtml } from './pushover.js';
+import { sendArticleNotification, escapeHtml } from './pushover.js';
+import { sendToAllNotifiers, validateNotifierConfig } from './notifiers/index.js';
 import { parseArgs } from './cli.js';
 import { getLanguagePack } from './i18n.js';
 import { createApi } from './api.js';
@@ -56,10 +57,14 @@ async function runWithConcurrency<T>(
 }
 
 function validateConfig(): void {
-  if (!runtimeConfig.noPush && (!config.pushoverUserKey || !config.pushoverAppToken)) {
-    log.error('PUSHOVER_USER_KEY and PUSHOVER_APP_TOKEN are required. Set them in .env file or use --no-push.');
-    process.exit(1);
-  }
+  if (runtimeConfig.noPush) return;
+
+  const problems = validateNotifierConfig();
+  if (problems.length === 0) return;
+
+  for (const problem of problems) log.error(problem);
+  log.error('Fix NOTIFY_CHANNELS / credentials in .env, or use --no-push.');
+  process.exit(1);
 }
 
 let pollCycleCount = 0;
@@ -302,7 +307,7 @@ export async function pollAndNotify(): Promise<PollResult> {
         }
 
         const digestTitle = `📄 arXiv Digest (${includedCount} ${includedCount === 1 ? 'paper' : 'papers'})`;
-        const success = await sendNotification(digestTitle, digestMessage, 'https://arxiv.org', labels.readMore);
+        const success = await sendToAllNotifiers(digestTitle, digestMessage, 'https://arxiv.org', labels.readMore);
 
         if (success) {
           for (const entry of arxivReady) {
@@ -384,7 +389,7 @@ async function main(): Promise<void> {
     });
 
     if (!runtimeConfig.noPush) {
-      await sendNotification(
+      await sendToAllNotifiers(
         '📡 Newscrux',
         pack.labels.startupMessage,
       );
@@ -394,7 +399,7 @@ async function main(): Promise<void> {
   }
 
   if (!runtimeConfig.noPush) {
-    const startupSent = await sendNotification(
+    const startupSent = await sendToAllNotifiers(
       '📡 Newscrux',
       pack.labels.startupMessage,
     );
@@ -402,7 +407,7 @@ async function main(): Promise<void> {
     if (startupSent) {
       log.info('Startup notification sent');
     } else {
-      log.error('Failed to send startup notification — check Pushover credentials');
+      log.error('Failed to send startup notification — check NOTIFY_CHANNELS and credentials');
     }
   }
 

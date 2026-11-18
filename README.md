@@ -198,8 +198,12 @@ The server binds to **127.0.0.1** by default. Mutating requests (`POST`/`PUT`/`D
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `LLM_GATEWAY_URL` | No | `http://127.0.0.1:7799` | Merkezi LLM gateway (Karargah / shared/llm) |
-| `PUSHOVER_USER_KEY` | Yes | — | Pushover user key |
-| `PUSHOVER_APP_TOKEN` | Yes | — | Pushover app token |
+| `NOTIFY_CHANNELS` | No | `pushover` | Delivery channels, comma separated: `pushover`, `telegram`, `discord` |
+| `PUSHOVER_USER_KEY` | Channel | — | Pushover user key (required when `pushover` is enabled) |
+| `PUSHOVER_APP_TOKEN` | Channel | — | Pushover app token (required when `pushover` is enabled) |
+| `TELEGRAM_BOT_TOKEN` | Channel | — | Telegram bot token (required when `telegram` is enabled) |
+| `TELEGRAM_CHAT_ID` | Channel | — | Telegram chat id (required when `telegram` is enabled) |
+| `DISCORD_WEBHOOK_URL` | Channel | — | Discord webhook URL (required when `discord` is enabled) |
 | `LLM_TEMPERATURE` | No | `0.2` | Sampling temperature |
 | `LLM_SUMMARY_MAX_TOKENS` | No | `600` | Max tokens for summary generation |
 | `LLM_RELEVANCE_MAX_TOKENS` | No | `1200` | Max tokens for relevance scoring output |

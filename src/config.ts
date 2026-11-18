@@ -38,6 +38,14 @@ export const config = {
   llmMaxRetries: toNonNegativeInt(process.env.LLM_MAX_RETRIES, 2),
   pushoverUserKey: process.env.PUSHOVER_USER_KEY || '',
   pushoverAppToken: process.env.PUSHOVER_APP_TOKEN || '',
+  /** Comma separated delivery channels: pushover, telegram, discord */
+  notifyChannels: (process.env.NOTIFY_CHANNELS || 'pushover')
+    .split(',')
+    .map(channel => channel.trim().toLowerCase())
+    .filter(Boolean),
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+  telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+  discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
   pollIntervalMinutes: toPositiveInt(process.env.POLL_INTERVAL_MINUTES, 15),
   maxArticlesPerPoll: toPositiveInt(process.env.MAX_ARTICLES_PER_POLL, 10),
   logLevel: (process.env.LOG_LEVEL || 'info') as 'debug' | 'info' | 'warn' | 'error',
